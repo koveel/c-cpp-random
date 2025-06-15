@@ -1,6 +1,6 @@
 #pragma once
 
-#include <type_traits>
+#include <algorithm>
 
 // Template stuff to deal with parameter packs and whatnot:
 template<size_t N, typename... Ts> using TypeOfNth =

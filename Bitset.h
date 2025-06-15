@@ -25,6 +25,19 @@ public:
 public:
 	Bitset() = default;
 
+	Bitset(std::initializer_list<bool> bits)
+	{
+		uint32_t i = 0;
+		for (bool bit : bits)
+			set(i++, bit);
+	}
+
+	template<size_t N2>
+	Bitset(const Bitset<N2>& other)
+	{
+		memcpy(m_Bits, other.get_data(), std::min(NBits, N2) / 8);
+	}
+
 	void set(size_t index, bool value)
 	{
 		uint8_t& packed = m_Bits[index / 8];
@@ -46,6 +59,9 @@ public:
 	{
 		return get(index);
 	}
+
+	uint8_t* get_data() { return &m_Bits[0]; }
+	const uint8_t* get_data() const { return &m_Bits[0]; }
 
 	void reset(bool value = false)
 	{
