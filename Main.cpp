@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <array>
 
+#include "Function.h"
 static void print_binary(uint32_t v, uint32_t num_bytes)
 {
 	for (uint32_t i = (num_bytes * 8); i > 0; i--)
@@ -13,12 +14,7 @@ static void print_binary(uint32_t v, uint32_t num_bytes)
 	}
 }
 
-using Entity = uint32_t;
-
-//static uint32_t has_component(const Entity& entity, uint32_t comp) { 
-//	return (entity.components & (1 << comp)) != 0;
-//}
-//entity.components |= (1 << comp);
+#include "ECS.h"
 
 struct TransformComponent
 {
@@ -32,101 +28,226 @@ struct PhysicsComponent
 	float mass;
 };
 
-struct ConstantHash {
-	size_t operator()(uint64_t x) const { return x; }
+struct AudioComponent
+{
+	float volume;
+	float attenuation;
 };
 
-#define ASSERT(x) if (!(x)) { __debugbreak(); }
+#include "Bitset.h"
 
-class ECS
+template<size_t N>
+static void print_bitset(const Bitset<N>& set)
+{
+	printf("Bitset<%d>\n", N);
+	for (uint32_t b = 0; b < set.count() / 8; b++) {
+		for (uint32_t i = 0; i < 8; i++)
+			printf("%d", set[(b * 8) + i]);
+		printf(" ");
+	}
+	printf("\n");
+}
+
+static constexpr size_t hash_combine(size_t lhs, size_t rhs)
+{
+	if constexpr (sizeof(size_t) >= 8)
+		return lhs ^ rhs + 0x517cc1b727220a95 + (lhs << 6) + (lhs >> 2);
+
+	return lhs = rhs + 0x9e3779b9 + (lhs << 6) + (lhs >> 2);
+}
+
+template<typename T0, typename... Ts>
+struct PopFrontTs
+{
+	using type = std::tuple<Ts...>;
+};
+
+template <typename T0, typename... Ts>
+decltype(auto) pop_front_v(T0&& t0, Ts&&... ts) {
+	if constexpr (sizeof...(Ts) == 0)
+		return t0;
+
+	return std::forward<Ts...>(ts...);
+}
+
+static int get_nth_index_of(const std::string& fmt, size_t n, char c)
+{
+	if (n >= fmt.length())
+		return -1;
+
+	size_t nth = 0;
+	for (size_t i = 0; i < fmt.length(); i++)
+	{
+		if (fmt[i] == c)
+		{
+			if (nth++ == n)
+				return i;
+		}
+	}
+
+	return -1;
+}
+
+// Erases leading and trailing whitespace from a string
+static void string_trim_whitespace(std::string& string)
+{
+	string.erase(0, string.find_first_not_of(' '));
+	string.erase(string.find_last_not_of(' ') + 1);
+}
+
+// Within a string, for any pair of spaces '  ', erases one of them
+// "this is  a    string" -> "this is a string"
+static void string_collapse_whitespace(std::string& string)
+{
+	for (size_t i = 0; i < string.length(); i++)
+	{
+		char c0 = string[i];
+		char c1 = string[i + 1];
+		if (c0 == ' ' && c1 == ' ')
+			string.erase(i--, 1);
+	}
+}
+
+class CommandHandler
 {
 private:
-	template<typename C>
-	using Pool = std::vector<C>;
-	using PoolBuffer = std::array<uint8_t, sizeof(Pool<uint32_t>)>; // Pool<C>s are placement new'd into these buffers
-
-	static inline std::unordered_map<size_t, PoolBuffer, ConstantHash> s_PoolMap; // [hash, pool]
-
-	template<typename C>
-	Pool<C>* get_or_create_pool(size_t hash)
+	struct ICommand
 	{
-		if (!s_PoolMap.count(hash))
+		virtual ~ICommand() {}
+		virtual void invoke(const std::vector<std::string>&) = 0;
+	};
+
+	template<typename... Args>
+	class Command : public ICommand
+	{
+	public:
+		using Callback = void(*)(Args...);
+		Callback callback = nullptr;
+
+		Command(Callback c)
+			: callback(c) {}
+
+		void invoke(const std::vector<std::string>& arguments) override
 		{
-			const size_t InitialPoolCapacity = 2;
+			constexpr size_t expectedArgs = sizeof...(Args);
+			if (arguments.size() != expectedArgs) {
+				printf("command expects %zu arguments, got %zu\n", expectedArgs, arguments.size());
+				return;
+			}
 
-			auto it = s_PoolMap.emplace(std::make_pair(hash, PoolBuffer{})).first;
-			PoolBuffer& buffer = (*it).second;
-
-			Pool<C>* pPool = new(buffer.data()) Pool<C>();
-			pPool->reserve(InitialPoolCapacity);
-			return pPool;
+			invoke_internal(arguments, std::index_sequence_for<Args...>{});
+		}
+	private:
+		template<size_t... Is>
+		void invoke_internal(const std::vector<std::string>& args, std::index_sequence<Is...>)
+		{
+			callback(command_parse_argument<Args>(args[Is])...);
 		}
 
-		PoolBuffer& erased = s_PoolMap[hash];
-		return reinterpret_cast<Pool<C>*>(&erased);
-	}
+		template<typename T>
+		T command_parse_argument(const std::string& stringified);
 
-	template<typename C>
-	Pool<C>* get_pool(size_t hash)
-	{
-		if (!s_PoolMap.count(hash))
-			return nullptr;
+		template<>
+		int command_parse_argument(const std::string& s) {
+			return atoi(s.c_str());
+		}
+		template<>
+		unsigned int command_parse_argument(const std::string& s) {
+			return atoi(s.c_str());
+		}
+		template<>
+		float command_parse_argument(const std::string& s) {
+			return std::strtof(s.c_str());
+		}
+		template<>
+		std::string command_parse_argument(const std::string& s) {
+			return s;
+		}
+		template<>
+		const std::string& command_parse_argument(const std::string& s) {
+			return s;
+		}
+	};
 
-		PoolBuffer& erased = s_PoolMap[hash];
-		return reinterpret_cast<Pool<C>*>(&erased);
-	}
+	std::unordered_map<std::string, std::unique_ptr<ICommand>> command_hash_to_callback_map;
 public:
-	ECS() = default;
-
-	Entity create_entity() const
+	template<typename... Args>
+	void listen_for(const std::string& name, void(*callback)(Args...))
 	{
-		static uint32_t id = 0;
-		return ++id;
+		command_hash_to_callback_map.emplace(name, std::make_unique<Command<Args...>>(callback));
 	}
 
-	template<typename C, typename... Args>
-	C& add_component(Entity entity, Args&&... args)
+	bool command_exists(const std::string& name) const
 	{
-		size_t hash = typeid(C).hash_code();
-		Pool<C>* pPool = get_or_create_pool<C>(hash);
-		
-		if (pPool->capacity() <= entity)
-			pPool->reserve(entity);
-
-		auto it = pPool->begin() + (entity - 1);
-		ASSERT(it == pPool->end());
-
-		return *pPool->emplace(it, std::forward<Args>(args)...);
+		return command_hash_to_callback_map.count(name);
 	}
 
-	template<typename C>
-	C* get_component(Entity entity)
+	bool parse_invoke_command(std::string raw) const
 	{
-		size_t hash = typeid(C).hash_code();
+		// Preprocess string
+		string_trim_whitespace(raw);
+		string_collapse_whitespace(raw);
 
-		Pool<C>* pPool = get_pool<C>(hash);
-		if (!pPool)
-			return nullptr;
+		size_t first_space = raw.find_first_of(' ');
+		bool no_arguments = first_space == std::string::npos;
 
-		auto it = pPool->begin() + (entity - 1);
-		return it == pPool->end() ? nullptr : &*it;
+		std::string name = raw.substr(0, first_space);
+		if (!command_exists(name)) {
+			printf("command '%s' doesn't exist\n", name.c_str());
+			return false;
+		}
+
+		// extract args
+		std::vector<std::string> args;
+		if (!no_arguments) {
+			args.reserve(std::count(raw.begin() + first_space, raw.end(), ' '));
+
+			for (uint32_t i = 0; i < args.capacity(); i++)
+			{
+				uint32_t space = get_nth_index_of(raw, i, ' ') + 1;
+				uint32_t next = get_nth_index_of(raw, i + 1, ' ');
+
+				args.emplace_back(raw.substr(space, i == args.capacity() - 1 ? std::string::npos : next - space));
+			}
+		}		
+
+		const auto& prototype = command_hash_to_callback_map.at(name);
+		prototype->invoke(args);
+
+		return true;
 	}
 };
+
+static ECS ecs;
+
+static void command_create()
+{
+	printf("created entity %d\n", ecs.create_entity());
+}
+
+static void command_destroy(uint32_t e)
+{
+	printf("destroyed entity %d\n", e);
+	ecs.destroy_entity(e);
+}
+
+static void command_echo(const std::string& message)
+{
+	printf("%s\n", message.c_str());
+}
+
+// create 5 hello
 
 int main()
 {
-	ECS ecs;
-	Entity entity = ecs.create_entity();
-	Entity entity2 = ecs.create_entity();
+	CommandHandler cmd;
+	cmd.listen_for("create", command_create);
+	cmd.listen_for("destroy", command_destroy);
+	cmd.listen_for("echo", command_echo);
 
+	char buffer[1024];
+	while (std::cin.getline(buffer, 1024))
 	{
-		auto& transform = ecs.add_component<TransformComponent>(entity);
-		transform.x = 5.0f;
-		transform.h = 10252.0f;
+		cmd.parse_invoke_command(buffer);
 	}
-
-	auto& physics = ecs.add_component<PhysicsComponent>(entity);
-
-	if (auto transform = ecs.get_component<TransformComponent>(entity2))
-		printf("%f, %f, %f, %f\n", transform->x, transform->y, transform->w, transform->h);
 }

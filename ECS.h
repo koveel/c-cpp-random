@@ -19,51 +19,31 @@ private:
 	using PoolBuffer = std::array<uint8_t, sizeof(Pool<uint32_t>)>; // Pool<C>s are placement new'd into these buffers
 
 	static inline std::unordered_map<size_t, PoolBuffer, ConstantHash> s_PoolMap; // [hash, pool]
-	static inline std::unordered_map<size_t, uint64_t, ConstantHash> s_ComponentMaskMap;
-
-	template<typename C>
-	Pool<C>* get_or_create_pool(size_t hash)
-	{
-		if (!s_PoolMap.count(hash))
-		{
-			const size_t InitialPoolCapacity = 2;
-
-			auto it = s_PoolMap.emplace(std::make_pair(hash, PoolBuffer{})).first;
-			PoolBuffer& buffer = (*it).second;
-
-			Pool<C>* pPool = new(buffer.data()) Pool<C>();
-			pPool->reserve(InitialPoolCapacity);
-			return pPool;
-		}
-
-		PoolBuffer& erased = s_PoolMap[hash];
-		return reinterpret_cast<Pool<C>*>(&erased);
-	}
-
-	template<typename C>
-	Pool<C>* get_pool(size_t hash)
-	{
-		if (!s_PoolMap.count(hash))
-			return nullptr;
-
-		PoolBuffer& erased = s_PoolMap[hash];
-		return reinterpret_cast<Pool<C>*>(&erased);
-	}
+	std::vector<size_t> graveyard;
+	Entity entity_count = 0;
 public:
 	ECS() = default;
 
 	Entity create_entity()
 	{
-		static uint32_t id = 0;
-		return ++id;
+		entity_count++;
+		if (graveyard.size()) 
+		{
+			Entity result = graveyard.back();
+			graveyard.pop_back();
+			return result;
+		}
+
+		return entity_count;
 	}
 
-	//void destroy_entity(Entity& entity)
-	//{
-	//
-	//
-	//	entity = 0;
-	//}
+	void destroy_entity(Entity& entity)
+	{
+		entity_count--;
+		graveyard.push_back(entity);
+
+		entity = 0;
+	}
 
 	static inline uint32_t s_ComponentMaskIt = 0;
 
@@ -74,13 +54,13 @@ public:
 	{
 		size_t hash = typeid(C).hash_code();
 
-		if (!s_ComponentMaskMap.count(hash))
-		{
-			s_ComponentMaskMap[hash] = s_ComponentMaskIt++;
-			printf("%s has component mask ", typeid(C).name());
-			print_binary(1u << (s_ComponentMaskIt - 1), 1);
-			printf("\n");
-		}
+		//if (!s_ComponentMaskMap.count(hash))
+		//{
+		//	s_ComponentMaskMap[hash] = s_ComponentMaskIt++;
+		//	printf("%s has component mask ", typeid(C).name());
+		//	print_binary(1u << (s_ComponentMaskIt - 1), 1);
+		//	printf("\n");
+		//}
 
 		Pool<C>* pPool = get_or_create_pool<C>(hash);
 
@@ -147,5 +127,34 @@ public:
 		//
 		//for (Entity entity = 0; entity < pPool->size(); entity++)
 		//	func(entity, (*pPool)[entity]);
+	}
+private:
+	template<typename C>
+	Pool<C>* get_or_create_pool(size_t hash)
+	{
+		if (!s_PoolMap.count(hash))
+		{
+			const size_t InitialPoolCapacity = 2;
+
+			auto it = s_PoolMap.emplace(std::make_pair(hash, PoolBuffer{})).first;
+			PoolBuffer& buffer = (*it).second;
+
+			Pool<C>* pPool = new(buffer.data()) Pool<C>();
+			pPool->reserve(InitialPoolCapacity);
+			return pPool;
+		}
+
+		PoolBuffer& erased = s_PoolMap[hash];
+		return reinterpret_cast<Pool<C>*>(&erased);
+	}
+
+	template<typename C>
+	Pool<C>* get_pool(size_t hash)
+	{
+		if (!s_PoolMap.count(hash))
+			return nullptr;
+
+		PoolBuffer& erased = s_PoolMap[hash];
+		return reinterpret_cast<Pool<C>*>(&erased);
 	}
 };
