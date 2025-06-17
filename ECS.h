@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Bitset.h"
+
 using Entity = uint32_t;
 
 //return (entity.components & (1 << comp)) != 0;
@@ -19,7 +21,8 @@ private:
 	using PoolBuffer = std::array<uint8_t, sizeof(Pool<uint32_t>)>; // Pool<C>s are placement new'd into these buffers
 
 	static inline std::unordered_map<size_t, PoolBuffer, ConstantHash> s_PoolMap; // [hash, pool]
-	std::vector<size_t> graveyard;
+
+	DynamicBitset entities_availability; // 0 = inactive, 1 = active
 	Entity entity_count = 0;
 public:
 	ECS() = default;
@@ -27,20 +30,20 @@ public:
 	Entity create_entity()
 	{
 		entity_count++;
-		if (graveyard.size()) 
-		{
-			Entity result = graveyard.back();
-			graveyard.pop_back();
-			return result;
-		}
+		Entity id = get_first_available_entity_id();
+		if (!id) id = entity_count;
 
-		return entity_count;
+		entities_availability[id - 1] = 1;
+		return id;
 	}
 
 	void destroy_entity(Entity& entity)
 	{
+		if (!entities_availability[entity - 1])
+			return; // entity doesn't exist (assert?)
+
 		entity_count--;
-		graveyard.push_back(entity);
+		entities_availability[entity - 1] = 0;
 
 		entity = 0;
 	}
@@ -53,14 +56,6 @@ public:
 	C& add_component(Entity entity, Args&&... args)
 	{
 		size_t hash = typeid(C).hash_code();
-
-		//if (!s_ComponentMaskMap.count(hash))
-		//{
-		//	s_ComponentMaskMap[hash] = s_ComponentMaskIt++;
-		//	printf("%s has component mask ", typeid(C).name());
-		//	print_binary(1u << (s_ComponentMaskIt - 1), 1);
-		//	printf("\n");
-		//}
 
 		Pool<C>* pPool = get_or_create_pool<C>(hash);
 
@@ -100,7 +95,6 @@ public:
 		if (it == pPool->end()) return;
 
 		(*it).~C();
-		//pPool->allocator_type//
 	}
 
 	// For each existing component C, call F(Entity, C&)
@@ -156,5 +150,16 @@ private:
 
 		PoolBuffer& erased = s_PoolMap[hash];
 		return reinterpret_cast<Pool<C>*>(&erased);
+	}
+
+	uint32_t get_first_available_entity_id()
+	{
+		for (uint32_t i = 0; i < entities_availability.count(); i++)
+		{
+			if (entities_availability[i] == 0)
+				return i + 1;
+		}
+
+		return 0;
 	}
 };
