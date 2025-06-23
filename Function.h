@@ -32,6 +32,8 @@ decltype(auto) PopFrontV(T0&& t0, Ts&&... ts) {
 // Represents a function pointer of any type, invokable with arguments
 // Can be bound to free-floating functions or member functions without any heap allocations
 // For functions that return a value, must specify return type when you invoke
+// 
+// Doesn't work all that well rn
 class Function
 {
 private:
@@ -41,10 +43,11 @@ private:
 	using MembFuncPtr = R(T::*)(Args...); // Member function
 
 	static constexpr size_t RequiredStorage = std::max(sizeof(FunctionPtr<void>), sizeof(MembFuncPtr<Function, void>));
-	uint8_t m_Storage[RequiredStorage]; // Buffer for function ptr
+	uint8_t m_Storage[RequiredStorage]{}; // Buffer for function ptr
 
 	void* p_Function = nullptr; // FunctionPtr* or MembFuncPtr*
 public:
+	// Cant assign Function = Function yet
 	Function() = default;
 
 	// Initialize with free floating function
@@ -63,20 +66,20 @@ public:
 	operator bool() const { return p_Function; }
 
 	template<typename R = void, typename... Args>
-	R operator()(Args&&... args) 
+	R operator()(Args&&... args) const
 	{
 		return invoke<R, Args...>(std::forward<Args>(args)...);
 	}
 
 	template<typename R = void>
-	R invoke()
+	R invoke() const
 	{
 		FunctionPtr<R>* function = static_cast<FunctionPtr<R>*>(p_Function);
 		return (*function)();
 	}
 
 	template<typename R = void, typename... Args>
-	R invoke(Args&&... args)
+	R invoke(Args&&... args) const
 	{
 		// Member function?
 		if constexpr (std::is_class_v<std::remove_reference_t<TypeOfNth<0, Args...>>>)

@@ -4,23 +4,38 @@
 
 using Entity = uint32_t;
 
-//return (entity.components & (1 << comp)) != 0;
-//entity.components |= (1 << comp);
-
 struct ConstantHash {
 	size_t operator()(uint64_t x) const { return x; }
 };
-
+ 
 #define ASSERT(x) if (!(x)) { __debugbreak(); }
 
 class ECS
 {
 private:
 	template<typename C>
-	using Pool = std::vector<C>;
-	using PoolBuffer = std::array<uint8_t, sizeof(Pool<uint32_t>)>; // Pool<C>s are placement new'd into these buffers
+	struct Storage
+	{
+		Storage(size_t initialSize)
+			: active(initialSize)
+		{
+			storage.resize(initialSize);
+		}
 
-	static inline std::unordered_map<size_t, PoolBuffer, ConstantHash> s_PoolMap; // [hash, pool]
+		size_t capacity() const { return storage.capacity(); }
+
+		void resize(size_t capacity)
+		{
+			storage.resize(capacity);
+			active.resize(capacity);
+		}
+
+		std::vector<C> storage;
+		// TODO: better way of doing this?
+		DynamicBitset active; // 0 = get_component invalid, 1 = get_component valid
+	};
+	using StorageBuffer = std::array<uint8_t, sizeof(Storage<uint32_t>)>; // Storage<C>s are placement new'd into these buffers
+	static inline std::unordered_map<size_t, StorageBuffer, ConstantHash> s_StorageMap; // [hash, storage]
 
 	DynamicBitset entities_availability; // 0 = inactive, 1 = active
 	Entity entity_count = 0;
@@ -37,6 +52,20 @@ public:
 		return id;
 	}
 
+	Entity create_entity(Entity desired_id)
+	{
+		ASSERT(desired_id > 0);
+
+		auto bit = entities_availability[desired_id - 1];
+		if (bit != 0)
+			return create_entity();
+
+		entity_count++;
+		bit = 1;
+
+		return desired_id;
+	}
+
 	void destroy_entity(Entity& entity)
 	{
 		if (!entities_availability[entity - 1])
@@ -48,8 +77,6 @@ public:
 		entity = 0;
 	}
 
-	static inline uint32_t s_ComponentMaskIt = 0;
-
 	// Constructs a component C belonging to a given entity and returns a reference to it
 	// asserts that the component does not already exist - crash if so
 	template<typename C, typename... Args>
@@ -57,15 +84,15 @@ public:
 	{
 		size_t hash = typeid(C).hash_code();
 
-		Pool<C>* pPool = get_or_create_pool<C>(hash);
+		Storage<C>* pStorage = get_or_create_storage<C>(hash);
+		if (pStorage->capacity() <= entity)
+			pStorage->resize(entity);
 
-		if (pPool->capacity() <= entity)
-			pPool->reserve(entity);
+		auto active = pStorage->active[entity - 1];
+		ASSERT(!active);
+		active = true;
 
-		auto it = pPool->begin() + (entity - 1);
-		ASSERT(it == pPool->end());
-
-		return *pPool->emplace(it, std::forward<Args>(args)...);
+		return (pStorage->storage[entity - 1] = C(std::forward<Args>(args)...));
 	}
 
 	// Returns a pointer to the component belonging to entity, or nullptr if it does not exist
@@ -74,12 +101,11 @@ public:
 	{
 		size_t hash = typeid(C).hash_code();
 
-		Pool<C>* pPool = get_pool<C>(hash);
-		if (!pPool)
+		Storage<C>* pStorage = get_storage<C>(hash);
+		if (!pStorage || !pStorage->active[entity - 1])
 			return nullptr;
 
-		auto it = pPool->begin() + (entity - 1);
-		return it == pPool->end() ? nullptr : &*it;
+		return &pStorage->storage[entity - 1];
 	}
 
 	// Destroys a component C belonging to an entity
@@ -88,13 +114,15 @@ public:
 	{
 		size_t hash = typeid(C).hash_code();
 
-		Pool<C>* pPool = get_pool<C>(hash);
-		if (!pPool) return;
+		Storage<C>* pStorage = get_storage<C>(hash);
+		if (!pStorage)
+			return;
 
-		auto it = pPool->begin() + (entity - 1);
-		if (it == pPool->end()) return;
+		auto active = pStorage->active[entity - 1];
+		ASSERT(active);
+		active = 0;
 
-		(*it).~C();
+		//(*it).~C();
 	}
 
 	// For each existing component C, call F(Entity, C&)
@@ -102,54 +130,55 @@ public:
 	void for_each(F func)
 	{
 		size_t hash = typeid(C).hash_code();
-		Pool<C>* pPool = get_pool<C>(hash);
+		Storage<C>* pStorage = get_storage<C>(hash);
 
-		for (Entity entity = 0; entity < pPool->size(); entity++)
-			func(entity, (*pPool)[entity]);
+		for (Entity entity = 0; entity < pStorage->size(); entity++)
+			func(entity, (*pStorage)[entity]);
 	}
 
 	template<typename F>
 	void for_each_on(Entity entity, F func)
 	{
-		for (auto& pair : s_PoolMap)
+		for (auto& pair : s_StorageMap)
 		{
-			//return reinterpret_cast<Pool<C>*>(&erased);
+			//return reinterpret_cast<Storage<C>*>(&erased);
 		}
 
 		//size_t hash = typeid(C).hash_code();
-		//Pool<C>* pPool = get_pool<C>(hash);
+		//Storage<C>* pStorage = get_storage<C>(hash);
 		//
-		//for (Entity entity = 0; entity < pPool->size(); entity++)
-		//	func(entity, (*pPool)[entity]);
+		//for (Entity entity = 0; entity < pStorage->size(); entity++)
+		//	func(entity, (*pStorage)[entity]);
 	}
+
+	uint32_t get_entity_count() const { return entity_count; }
 private:
 	template<typename C>
-	Pool<C>* get_or_create_pool(size_t hash)
+	Storage<C>* get_or_create_storage(size_t hash)
 	{
-		if (!s_PoolMap.count(hash))
+		if (!s_StorageMap.count(hash))
 		{
-			const size_t InitialPoolCapacity = 2;
+			const size_t InitialStorageCapacity = 8;
 
-			auto it = s_PoolMap.emplace(std::make_pair(hash, PoolBuffer{})).first;
-			PoolBuffer& buffer = (*it).second;
+			auto it = s_StorageMap.emplace(std::make_pair(hash, StorageBuffer{})).first;
+			StorageBuffer& buffer = (*it).second;
 
-			Pool<C>* pPool = new(buffer.data()) Pool<C>();
-			pPool->reserve(InitialPoolCapacity);
-			return pPool;
+			Storage<C>* pStorage = new(buffer.data()) Storage<C>(InitialStorageCapacity);
+			return pStorage;
 		}
 
-		PoolBuffer& erased = s_PoolMap[hash];
-		return reinterpret_cast<Pool<C>*>(&erased);
+		StorageBuffer& erased = s_StorageMap[hash];
+		return reinterpret_cast<Storage<C>*>(&erased);
 	}
 
 	template<typename C>
-	Pool<C>* get_pool(size_t hash)
+	Storage<C>* get_storage(size_t hash)
 	{
-		if (!s_PoolMap.count(hash))
+		if (!s_StorageMap.count(hash))
 			return nullptr;
 
-		PoolBuffer& erased = s_PoolMap[hash];
-		return reinterpret_cast<Pool<C>*>(&erased);
+		StorageBuffer& erased = s_StorageMap[hash];
+		return reinterpret_cast<Storage<C>*>(&erased);
 	}
 
 	uint32_t get_first_available_entity_id()

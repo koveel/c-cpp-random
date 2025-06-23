@@ -151,6 +151,15 @@ public:
 		memset(m_Bits, value, m_CapacityBytes);
 	}
 
+	void resize(size_t capacityBits) // grow
+	{
+		size_t bytes = capacityBits / 8;
+		if (m_CapacityBytes >= bytes)
+			return;
+
+		reallocate(bytes);
+	}
+
 	constexpr size_t count() const { return m_CapacityBytes * 8; }
 private:
 	void reallocate(size_t newCapacityBytes)
