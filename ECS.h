@@ -16,26 +16,14 @@ private:
 	template<typename C>
 	struct Storage
 	{
-		Storage(size_t initialSize)
-			: active(initialSize)
-		{
-			storage.resize(initialSize);
-		}
-
-		size_t capacity() const { return storage.capacity(); }
-
-		void resize(size_t capacity)
-		{
-			storage.resize(capacity);
-			active.resize(capacity);
-		}
-
 		std::vector<C> storage;
-		// TODO: better way of doing this?
-		DynamicBitset active; // 0 = get_component invalid, 1 = get_component valid
+
+		static inline uint64_t ComponentMask = 0; // Limit of 64 components for now
 	};
 	using StorageBuffer = std::array<uint8_t, sizeof(Storage<uint32_t>)>; // Storage<C>s are placement new'd into these buffers
 	static inline std::unordered_map<size_t, StorageBuffer, ConstantHash> s_StorageMap; // [hash, storage]
+
+	uint64_t entities_owned_components[64];
 
 	DynamicBitset entities_availability; // 0 = inactive, 1 = active
 	Entity entity_count = 0;
@@ -75,22 +63,23 @@ public:
 		entities_availability[entity - 1] = 0;
 
 		entity = 0;
-	}
+	}	
 
 	// Constructs a component C belonging to a given entity and returns a reference to it
 	// asserts that the component does not already exist - crash if so
 	template<typename C, typename... Args>
 	C& add_component(Entity entity, Args&&... args)
 	{
-		size_t hash = typeid(C).hash_code();
+		static size_t hash = typeid(C).hash_code();
 
 		Storage<C>* pStorage = get_or_create_storage<C>(hash);
-		if (pStorage->capacity() <= entity)
-			pStorage->resize(entity);
+		if (pStorage->storage.capacity() <= entity)
+			pStorage->storage.resize(entity);
 
-		auto active = pStorage->active[entity - 1];
-		ASSERT(!active);
-		active = true;
+		uint64_t& ownedComponentsMask = entities_owned_components[entity - 1];
+		bool has = ownedComponentsMask & pStorage->ComponentMask;
+		ASSERT(!has);
+		ownedComponentsMask |= pStorage->ComponentMask;
 
 		return (pStorage->storage[entity - 1] = C(std::forward<Args>(args)...));
 	}
@@ -99,10 +88,12 @@ public:
 	template<typename C>
 	C* get_component(Entity entity)
 	{
-		size_t hash = typeid(C).hash_code();
+		static size_t hash = typeid(C).hash_code();
 
 		Storage<C>* pStorage = get_storage<C>(hash);
-		if (!pStorage || !pStorage->active[entity - 1])
+		bool has = entities_owned_components[entity - 1] & pStorage->ComponentMask;
+		
+		if (!pStorage || !has)
 			return nullptr;
 
 		return &pStorage->storage[entity - 1];
@@ -112,15 +103,16 @@ public:
 	template<typename C>
 	void remove_component(Entity entity)
 	{
-		size_t hash = typeid(C).hash_code();
+		static size_t hash = typeid(C).hash_code();
 
 		Storage<C>* pStorage = get_storage<C>(hash);
 		if (!pStorage)
 			return;
 
-		auto active = pStorage->active[entity - 1];
-		ASSERT(active);
-		active = 0;
+		uint64_t& ownedComponentsMask = entities_owned_components[entity - 1];
+		bool has = ownedComponentsMask & pStorage->ComponentMask;
+		ASSERT(has);
+		ownedComponentsMask ^= pStorage->ComponentMask;
 
 		//(*it).~C();
 	}
@@ -129,30 +121,22 @@ public:
 	template<typename C, typename F>
 	void for_each(F func)
 	{
-		size_t hash = typeid(C).hash_code();
+		static size_t hash = typeid(C).hash_code();
 		Storage<C>* pStorage = get_storage<C>(hash);
 
-		for (Entity entity = 0; entity < pStorage->size(); entity++)
-			func(entity, (*pStorage)[entity]);
-	}
-
-	template<typename F>
-	void for_each_on(Entity entity, F func)
-	{
-		for (auto& pair : s_StorageMap)
+		for (uint32_t entity = 0; entity < pStorage->storage.capacity(); entity++)
 		{
-			//return reinterpret_cast<Storage<C>*>(&erased);
-		}
+			bool has = entities_owned_components[entity - 1] & pStorage->ComponentMask;
+			if (!has) continue;
 
-		//size_t hash = typeid(C).hash_code();
-		//Storage<C>* pStorage = get_storage<C>(hash);
-		//
-		//for (Entity entity = 0; entity < pStorage->size(); entity++)
-		//	func(entity, (*pStorage)[entity]);
+			func(entity + 1, pStorage->storage[entity]);
+		}
 	}
 
 	uint32_t get_entity_count() const { return entity_count; }
 private:
+	uint32_t ComponentIt = 0;
+
 	template<typename C>
 	Storage<C>* get_or_create_storage(size_t hash)
 	{
@@ -163,7 +147,10 @@ private:
 			auto it = s_StorageMap.emplace(std::make_pair(hash, StorageBuffer{})).first;
 			StorageBuffer& buffer = (*it).second;
 
-			Storage<C>* pStorage = new(buffer.data()) Storage<C>(InitialStorageCapacity);
+			Storage<C>* pStorage = new(buffer.data()) Storage<C>();
+			pStorage->storage.resize(InitialStorageCapacity);
+			Storage<C>::ComponentMask = 1 << ComponentIt++;
+
 			return pStorage;
 		}
 
