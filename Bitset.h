@@ -1,6 +1,6 @@
 #pragma once
 
-// Offers access to a contiguous series of single-bit values (really a uint8_t[])
+// Offers access to a contiguous series of single-bit values
 // sizeof(Bitset<N>) = sizeof(uint8_t) * N / 8
 // Doesn't bounds check !
 template<size_t N>
@@ -63,8 +63,9 @@ public:
 	uint8_t* get_data() { return &m_Bits[0]; }
 	const uint8_t* get_data() const { return &m_Bits[0]; }
 
-	void reset(bool value = false)
+	void reset(bool flag = false)
 	{
+		uint8_t value = flag ? ~0u : 0u;
 		memset(m_Bits, value, sizeof(m_Bits));
 	}
 
