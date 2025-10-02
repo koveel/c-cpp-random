@@ -8,86 +8,84 @@ template<typename T>
 class DynamicArray
 {
 public:
-	using Iterator = Iterator<T>;
+	using Iterator = ContiguousIterator<T>;
 public:
-	DynamicArray()
-	{
-		reallocate(2);
-	}
-	DynamicArray(uint32_t capacity)
+	DynamicArray(size_t capacity = 2)
 	{
 		reallocate(capacity);
+	}
+	DynamicArray(std::initializer_list<T> elements)
+	{
+		reallocate(elements.size());
+		for (const T& t : elements)
+			add(t);
+	}
+	DynamicArray(const DynamicArray& other)
+	{
+		reallocate(other.size());
+		for (const T& t : other)
+			add(t);
 	}
 	~DynamicArray()
 	{
 		clear();
-		::operator delete(mData, mCapacity * sizeof(T));
+		::operator delete(m_Data, m_Capacity * sizeof(T));
 	}
 
 	void add(const T& element)
 	{
-		if (mSize >= mCapacity)
-			reallocate(static_cast<uint32_t>(mCapacity + mCapacity / 2));
+		if (m_Size >= m_Capacity)
+			reallocate(m_Capacity + m_Capacity / 2);
 
-		new (&mData[mSize++]) T(element);
+		new (m_Data + m_Size++) T(element);
 	}
 	void add(T&& element)
 	{
-		if (mSize >= mCapacity)
-			reallocate(static_cast<uint32_t>(mCapacity + mCapacity / 2));
+		if (m_Size >= m_Capacity)
+			reallocate(m_Capacity + m_Capacity / 2);
 
-		new (&mData[mSize++]) T(std::move(element));
+		new (m_Data + m_Size++) T(std::move(element));
 	}
 
 	template<typename... Args>
 	T& emplace(Args&&... args)
 	{
-		if (mSize >= mCapacity)
-			reallocate(static_cast<uint32_t>(mCapacity + mCapacity / 2));
+		if (m_Size >= m_Capacity)
+			reallocate(m_Capacity + m_Capacity / 2);
 
-		new(&mData[mSize]) T(std::forward<Args>(args)...);
-		return mData[mSize++];
+		new(m_Data + m_Size) T(std::forward<Args>(args)...);
+		return m_Data[m_Size++];
+	}	
+
+	void remove(size_t index)
+	{
+		m_Data[index].~T();
+		m_Size--;
+
+		for (size_t i = index; i < m_Size; i++)
+			new(m_Data + i) T(std::move(m_Data[i + 1]));
 	}
-
+	void remove(Iterator it)
+	{
+		size_t index = it - Iterator(m_Data);
+		remove(index);
+	}
 	void remove_last()
 	{
-		if (mSize <= 0)
+		if (m_Size <= 0)
 			return;
 
-		mSize--;
-		mData[mSize].~T();
-	}
-
-	void remove(uint32_t index)
-	{
-		mData[index].~T();
-		mSize--;
-
-		for (uint32_t i = index; i < mSize; i++)
-			new(&mData[i]) T(std::move(mData[i + 1]));
-	}
-	void remove(const Iterator& it)
-	{
-		uint32_t index = it - Iterator(mData);
-		remove(index);
+		m_Size--;
+		m_Data[m_Size].~T();
 	}
 
 	void clear()
 	{
-		for (uint32_t i = 0; i < mSize; i++)
-			mData[i].~T();
-		mSize = 0;
+		for (size_t i = 0; i < m_Size; i++)
+			m_Data[i].~T();
+		m_Size = 0;
 	}
-
-	// shrink capacity to size (reallocates)
-	void fit()
-	{
-		if (mSize == mCapacity)
-			return;
-
-		reallocate(mSize);
-	}
-
+	
 	Iterator find(const T& element) const
 	{
 		return std::find(begin(), end(), element);
@@ -100,7 +98,7 @@ public:
 
 	int32_t index_of(const T& element) const
 	{
-		uint32_t index = 0;
+		int32_t index = 0;
 		for (Iterator it = begin(); it != end(); it++)
 		{
 			if (*it == element)
@@ -111,56 +109,74 @@ public:
 		return -1;
 	}
 
-	void reserve(uint32_t capacity)
+	void reserve(size_t capacity)
 	{
-		if (capacity < mCapacity)
+		if (capacity < m_Capacity)
 			return;
 
 		reallocate(capacity);
 	}
 
-	T& operator[](uint32_t index)
+	void resize(size_t capacity)
 	{
-		return mData[index];
-	}
-	const T& operator[](uint32_t index) const
-	{
-		return mData[index];
-	}
+		m_Capacity = capacity;
+		reserve(m_Capacity);
 
-	uint32_t get_size() const { return mSize; }
-	uint32_t get_capacity() const { return mCapacity; }
-
-	Iterator begin() const { return { mData }; }
-	Iterator end()   const { return { mData + mSize }; }
-private:
-	void reallocate(uint32_t newCapacity)
-	{
-		if (!mData)
+		for (size_t i = m_Size; i < m_Capacity; i++)
 		{
-			mCapacity = newCapacity;
-			mData = (T*)::operator new(mCapacity * sizeof(T));
+			new(m_Data + i) T();
+		}
+	}
+
+	// shrink capacity to size (reallocates)
+	void fit()
+	{
+		if (m_Size == m_Capacity)
+			return;
+
+		reallocate(m_Size);
+	}
+
+	T& operator[](size_t index)
+	{
+		return m_Data[index];
+	}
+	const T& operator[](size_t index) const
+	{
+		return m_Data[index];
+	}
+
+	T& last() { return operator[](m_Size - 1); }
+
+	size_t size() const { return m_Size; }
+	size_t capacity() const { return m_Capacity; }
+
+	Iterator begin() const { return { m_Data }; }
+	Iterator end()   const { return { m_Data + m_Size }; }
+private:
+	void reallocate(size_t newCapacity)
+	{
+		if (!m_Data)
+		{
+			m_Capacity = newCapacity;
+			m_Data = (T*)::operator new(m_Capacity * sizeof(T));
 			return;
 		}
 
-		// shrink that
-		mSize = newCapacity < mSize ? newCapacity : mSize;
-		//if (newCapacity < mSize)
-		//	mSize = newCapacity;
+		m_Size = newCapacity < m_Size ? newCapacity : m_Size;
 
 		T* newData = (T*)::operator new(newCapacity * sizeof(T));
-		for (uint32_t i = 0; i < mSize; i++)
+		for (size_t i = 0; i < m_Size; i++)
 		{
-			new (&newData[i]) T(std::move(mData[i]));
-			mData[i].~T();
+			new (newData + i) T(std::move(m_Data[i]));
 		}
 
-		::operator delete(mData, mCapacity * sizeof(T));
-		mData = newData;
-		mCapacity = newCapacity;
+		::operator delete(m_Data, m_Capacity * sizeof(T));
+		m_Data = newData;
+		m_Capacity = newCapacity;
 	}
 private:
-	uint32_t mSize = 0;
-	uint32_t mCapacity = 0;
-	T* mData = nullptr;
+	size_t m_Size = 0;
+	size_t m_Capacity = 0;
+	T* m_Data = nullptr;
 };
