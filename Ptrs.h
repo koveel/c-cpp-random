@@ -49,22 +49,13 @@ template<typename T>
 class shared_ptr
 {
 public:
-	// handles constructing managed object in-place or taking ownership of preallocated object
-	struct control_block
+	struct control_block_t
 	{
 		std::atomic<size_t> reference_count = 0;
 
-		static constexpr size_t ManagedBufferSize = std::max(sizeof(T), sizeof(T*));
-		uint8_t managed_buffer[ManagedBufferSize]{};
-		bool is_managed_dynamic = false;
-
-		control_block() = default;
-		control_block(T* managed)
-			: is_managed_dynamic(true)
-		{
-			new(managed_buffer) T* (managed);
-			add_ref();
-		}
+		virtual ~control_block_t() = default;
+		virtual void destroy_managed() {}
+		void* fn_destroy_managed = nullptr;
 
 		void add_ref()
 		{
@@ -78,19 +69,40 @@ public:
 				return;
 
 			// destroy/delete managed object and self
-			if (is_managed_dynamic) {
-				T* dynamic = *reinterpret_cast<T**>(managed_buffer);
-				delete dynamic;
-			}
-			else {
-				reinterpret_cast<T*>(managed_buffer)->~T();
-			}
+			destroy_managed();
 			delete this;
-		}		
+		}
+	};
+
+	struct inplace_control_block : public control_block_t
+	{
+		T managed;
+
+		template<typename... Args>
+		inplace_control_block(Args&&... args)
+			: managed(std::forward<Args>(args)...)
+		{
+		}
+	};
+
+	struct dynamic_control_block : public control_block_t
+	{
+		T* managed = nullptr;
+
+		dynamic_control_block(T* managed)
+			: managed(managed)
+		{
+			control_block_t::add_ref();
+		}
+
+		void destroy_managed() override
+		{
+			delete managed;
+		}
 	};
 public:
 	shared_ptr() = default;
-	shared_ptr(control_block* control, T* ptr)
+	shared_ptr(control_block_t* control, T* ptr)
 		: m_control(control), m_ptr(ptr)
 	{
 		m_control->add_ref();
@@ -98,7 +110,7 @@ public:
 	shared_ptr(T* ptr)
 		: m_ptr(ptr)
 	{
-		m_control = new control_block(ptr);
+		m_control = new dynamic_control_block(ptr);
 	}
 	shared_ptr(const shared_ptr<T>& other)
 		: m_control(other.m_control), m_ptr(other.m_ptr)
@@ -133,7 +145,7 @@ public:
 		}
 
 		m_ptr = ptr;
-		m_control = new control_block(ptr);
+		m_control = new dynamic_control_block(ptr);
 	}
 
 	bool empty() const { return m_ptr; }
@@ -157,17 +169,5 @@ private:
 	}
 private:
 	T* m_ptr = nullptr;
-	control_block* m_control = nullptr;
+	control_block_t* m_control = nullptr;
 };
-
-template<typename T, typename... Args>
-static shared_ptr<T> make_shared(Args&&... args)
-{
-	auto* control = new shared_ptr<T>::control_block();
-	new(control->managed_buffer) T(std::forward<Args>(args)...);
-	T* managed = reinterpret_cast<T*>(control->managed_buffer);
-
-	return shared_ptr<T>(control, managed);
-}
-
-static_assert(sizeof(shared_ptr<int>) == 16);
