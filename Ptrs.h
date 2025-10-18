@@ -55,7 +55,6 @@ public:
 
 		virtual ~control_block_t() = default;
 		virtual void destroy_managed() {}
-		void* fn_destroy_managed = nullptr;
 
 		void add_ref()
 		{
@@ -170,4 +169,5 @@ private:
 private:
 	T* m_ptr = nullptr;
 	control_block_t* m_control = nullptr;
+
 };
