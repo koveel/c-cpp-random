@@ -1,5 +1,81 @@
 #pragma once
 
+template<size_t N>
+class Bitset;
+
+template<size_t N>
+class BitsetIterator
+{
+public:
+	BitsetIterator(const Bitset<N>* bitset, size_t index)
+		: p_Bitset(bitset), m_Index(index)
+	{
+	}
+
+	BitsetIterator& operator++()
+	{
+		m_Index++;
+		return *this;
+	}
+	BitsetIterator operator++(int)
+	{
+		BitsetIterator it = *this;
+		++m_Index;
+		return it;
+	}
+	BitsetIterator& operator--()
+	{
+		m_Index--;
+		return *this;
+	}
+	BitsetIterator operator--(int)
+	{
+		BitsetIterator it = *this;
+		--m_Index;
+		return it;
+	}
+	uint32_t operator+(const BitsetIterator& other) const
+	{
+		return static_cast<uint32_t>(m_Index + other.m_Index);
+	}
+	uint32_t operator-(const BitsetIterator& other) const
+	{
+		return static_cast<uint32_t>(m_Index - other.m_Index);
+	}
+
+	decltype(auto) operator[](size_t index) const
+	{
+		return (*p_Bitset)[m_Index + index];
+	}
+	decltype(auto) operator->() const
+	{
+		return (*p_Bitset)[m_Index];
+	}
+	decltype(auto) operator*() const
+	{
+		return (*p_Bitset)[m_Index];
+	}
+	bool operator==(const BitsetIterator& other) const
+	{
+		return m_Index == other.m_Index;
+	}
+	bool operator!=(const BitsetIterator& other) const
+	{
+		return m_Index != other.m_Index;
+	}
+	bool operator<(const BitsetIterator& other) const
+	{
+		return m_Index < other.m_Index;
+	}
+	bool operator>(const BitsetIterator& other) const
+	{
+		return m_Index > other.m_Index;
+	}
+private:
+	size_t m_Index = 0;
+	const Bitset<N>* p_Bitset = nullptr;
+};
+
 // Offers access to a contiguous series of single-bit values
 // sizeof(Bitset<N>) = sizeof(uint8_t) * N / 8
 // Doesn't bounds check !
@@ -70,8 +146,14 @@ public:
 	}
 
 	constexpr size_t count() const { return NBits; }
+
+	BitsetIterator<NBits> begin() { return BitsetIterator<NBits>(this, 0); }
+	BitsetIterator<NBits> end()   { return BitsetIterator<NBits>(this, NBits); }
+	BitsetIterator<NBits> begin() const { return BitsetIterator<NBits>(this, 0); }
+	BitsetIterator<NBits> end() const { return BitsetIterator<NBits>(this, NBits); }
 };
 
+#if 0
 // Same as Bitset<N>, but stores a dynamically-resizing buffer of uint8_t
 // Only grows, with 2x growth every reallocation
 struct DynamicBitset
@@ -175,3 +257,4 @@ private:
 		m_CapacityBytes = newCapacityBytes;
 	}
 };
+#endif
